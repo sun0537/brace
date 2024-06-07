@@ -1,4 +1,4 @@
-# base64_brases.sh
+## base64_brases.sh
 batch conversion [vmess://(Base64 encoded json format server data) ](https://github.com/2dust/v2rayN/wiki/%E5%88%86%E4%BA%AB%E9%93%BE%E6%8E%A5%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E(ver-2)#%E5%88%86%E4%BA%AB%E7%9A%84%E9%93%BE%E6%8E%A5%E4%BA%8C%E7%BB%B4%E7%A0%81%E6%A0%BC%E5%BC%8Fvmessbase64%E7%BC%96%E7%A0%81%E7%9A%84json%E6%A0%BC%E5%BC%8F%E6%9C%8D%E5%8A%A1%E5%99%A8%E6%95%B0%E6%8D%AE).
 
 
@@ -18,7 +18,7 @@ The name of the output file is input_file.encoded.
 ./base64_braces.sh -e test1
 ```
 
-# example: 
+## example: 
 The name of the input file is test1, the content format:
 ```
 {
