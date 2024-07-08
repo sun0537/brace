@@ -1,0 +1,7 @@
+[Unit]
+Description=Vaultwarden Backup Script
+
+[Service]
+ExecStart=/bin/bash /home/user/vaultwarden/backup.sh -s /home/user/vaultwarden/vw-data/ -b /home/user/vaultwarden/localbuckup/ -c /home/user/.config/rclone/rclone.conf -r "remote:vaultwarden/|remote2:vaultwarden/|remote3:vaultwarden/" -e user@email.com -l /home/user/vaultwarden/log/vault.log
+
+
