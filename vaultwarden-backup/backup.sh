@@ -163,7 +163,7 @@ del_db_file() {
         fi
 }
 
-del_db_file "*.sql"
+del_db_file "*.sqlite3"
 
 # 检查文件夹变更函数
 check_and_backup_dir() {
