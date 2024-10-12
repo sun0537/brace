@@ -156,13 +156,14 @@ del_db_file() {
         if [ "$DB_COUNT" -gt 1 ]; then
             FILES_TO_DELETE=$(find "$BACKUP_DIR" -maxdepth 1 -type f -name "$files" -printf "%T@ %p\n" | sort -nr | cut -d' ' -f2- | tail -n +2)
             for file in $FILES_TO_DELETE; do
-		file=$(basename "$file")
+	#	file=$(basename "$file")
                 log_message " 删除旧文件 $file"
                 rm "$file" || handle_error "删除旧的数据库备份文件失败"
             done
         fi
 }
 
+del_db_file "*.sql"
 del_db_file "*.sqlite3"
 
 # 检查文件夹变更函数
@@ -221,6 +222,8 @@ if [ "$backup_successful" = true ]; then
     cd "$BACKUP_DIR" || handle_error "切换到备份目录失败"
     BACKUP_DIR=$(pwd)
     BACKUP_ARCHIVE="vaultwarden-backup-$(date '+%Y%m%d-%H%M').tar.gz"
+    log_message "删除旧备份压缩文件：$(find $BACKUP_DIR -maxdepth 1 -name '*.tar.gz' -printf '%P\n')"
+    find . -maxdepth 1 -name "*.tar.gz" -exec rm -f {} \;
     log_message "$(find $BACKUP_DIR -mindepth 1 -printf '%P\n')生成压缩文件: $BACKUP_ARCHIVE"
     tar -czf "$BACKUP_ARCHIVE" * || handle_error "压缩备份文件失败"
     IFS='|' read -ra REMOTES <<< "$REMOTE_DIRS"
@@ -245,7 +248,7 @@ if [ "$backup_successful" = true ]; then
         check_and_install msmtp "sudo apt install -y msmtp"
         check_and_install msmtp-mta "sudo apt install -y msmtp-mta"
         check_and_install bsd-mailx "sudo apt install -y bsd-mailx"
-        echo "Vaultwarden 备份已完成并同步至远程存储。" | mail -s "Vaultwarden 备份结果" "$EMAIL"
+        echo "$(date '+%Y-%m-%d %H:%M %Z'): Vaultwarden 备份已完成并同步至远程存储。" | mail -s "Vaultwarden 备份结果" "$EMAIL"
         if [ $? -eq 0 ]; then
             log_message "备份结果已发送到邮箱 $EMAIL"
         else
