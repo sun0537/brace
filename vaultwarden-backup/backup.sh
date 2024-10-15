@@ -192,22 +192,29 @@ check_and_backup_dir() {
     done  
 }
 
+
 # 检查配置文件和密钥文件变更函数
 check_and_backup_files() {
     local files=("$@")
-    for file in "$SOURCE_DIR/${files[@]}"; do
-        if [ -f "$SOURCE_DIR/$file" ]; then
-            if [ "$SOURCE_DIR/$file" -nt "$BACKUP_DIR/$file" ]; then
-                log_message " $file 文件有变更，进行备份..." 
-                cp "$SOURCE_DIR/$file" "$BACKUP_DIR/$file" || handle_error "$file 文件备份失败"
-                backup_successful=true
-            else
-                log_message " $file 文件未变更" 
+    
+    for file_pattern in "${files[@]}"; do
+        # 使用通配符匹配文件
+        for file in "$SOURCE_DIR"/$file_pattern; do
+            # 确保文件存在
+            if [ -f "$file" ]; then
+                local filename=$(basename "$file")
+                # 如果文件在源目录有更新，或者备份文件不存在
+                if [ "$file" -nt "$BACKUP_DIR/$filename" ]; then
+                    log_message " $filename 文件有变更，进行备份..."
+                    cp "$file" "$BACKUP_DIR/$filename" || handle_error "$filename 文件备份失败"
+                    backup_successful=true
+                else
+                    log_message " $filename 文件未变更"
+                fi
             fi
-        fi
+        done
     done
 }
-
 
 # 检查并备份目录
 check_and_backup_dir "attachments" "sends" "icon_cache"
