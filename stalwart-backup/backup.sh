@@ -240,7 +240,7 @@ backup_and_rclone(){
 		# 1. 先将中文主题进行Base64编码
 		#    注意：echo -n 可以防止在字符串末尾添加换行符
 		SUBJECT_ENCODED=$(echo -n "stalwart 备份结果" | base64)
-
+                CONTENT_ENCODED=$(echo "$(date '+%Y-%m-%d %H:%M %Z'): stalwart 备份已完成并同步至远程存储。文件大小：$TOTAL" | base64)
 		# 2. 构建邮件内容
 		(
 		#echo "From: sender@yourdomain.com"
@@ -252,11 +252,11 @@ backup_and_rclone(){
 		# ---其他MIME头和正文部分与方案一相同---
 		echo "MIME-Version: 1.0"
 		echo "Content-Type: text/plain; charset=UTF-8"
-		echo "Content-Transfer-Encoding: 8bit"
+		echo "Content-Transfer-Encoding: base64"
 		echo ""
 #		echo "你好，"
 #		echo "这封邮件的正文和主题现在都应该能正确显示了。"
-		echo "$(date '+%Y-%m-%d %H:%M %Z'): stalwart 备份已完成并同步至远程存储。文件大小：$TOTAL"
+		echo "${CONTENT_ENCODED}"
 
 		) |runuser -u admin -- msmtp -C /home/admin/.msmtprc "$EMAIL"
 		if [ $? -eq 0 ]; then
