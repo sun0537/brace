@@ -203,6 +203,12 @@ backup_and_rclone(){
             log_message " 停止 stalwart 服务"
 	    # 压缩备份的文件
 	    cd "$BACKUP_DIR" || handle_error "切换到备份目录失败"
+
+	    EXPORT_FILE="$BACKUP_DIR/export"
+            mkdir -p "$EXPORT_FILE"
+            log_message " 导出 stalwart 数据库文件"
+            /opt/stalwart/bin/stalwart -c /opt/stalwart/etc/config.toml -e "$EXPORT_FILE"
+
 	    BACKUP_DIR=$(pwd)
 	    BACKUP_ARCHIVE="stalwart-backup-$(date '+%Y%m%d-%H%M').tar.gz"
 	    log_message "删除旧备份压缩文件：$(find $BACKUP_DIR -maxdepth 1 -name '*.tar.gz' -printf '%P\n')"
