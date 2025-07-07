@@ -11,6 +11,7 @@ LOG_TO_FILE=false
 LOGFILE="$(dirname "$0")/backup.log"
 RCLONE_CONFIG=""
 RCLONE_COMMAND="rclone"
+TOTAL=""
 
 # 显示帮助信息函数
 show_help() {
@@ -233,6 +234,7 @@ if [ "$backup_successful" = true ]; then
     find . -maxdepth 1 -name "*.tar.gz" -exec rm -f {} \;
     log_message "$(find $BACKUP_DIR -mindepth 1 -printf '%P\n')生成压缩文件: $BACKUP_ARCHIVE"
     tar -czf "$BACKUP_ARCHIVE" * || handle_error "压缩备份文件失败"
+    TOTAL=$(ls -lah $BACKUP_ARCHIVE | awk '{print $5}')
     IFS='|' read -ra REMOTES <<< "$REMOTE_DIRS"
     for remote in "${REMOTES[@]}"; do
        $RCLONE_COMMAND copy "$BACKUP_ARCHIVE" "$remote" || handle_error "rclone 传输到 $remote 失败"
@@ -255,7 +257,7 @@ if [ "$backup_successful" = true ]; then
         check_and_install msmtp "sudo apt install -y msmtp"
         check_and_install msmtp-mta "sudo apt install -y msmtp-mta"
         check_and_install bsd-mailx "sudo apt install -y bsd-mailx"
-        echo "$(date '+%Y-%m-%d %H:%M %Z'): Vaultwarden 备份已完成并同步至远程存储。" | mail -s "Vaultwarden 备份结果" "$EMAIL"
+        echo "$(date '+%Y-%m-%d %H:%M %Z'): Vaultwarden 备份已完成并同步至远程存储。文件大小：$TOTAL" | mail -s "Vaultwarden 备份结果" "$EMAIL"
         if [ $? -eq 0 ]; then
             log_message "备份结果已发送到邮箱 $EMAIL"
         else
