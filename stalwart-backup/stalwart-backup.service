@@ -1,0 +1,7 @@
+[Unit]
+Description=stalwart Backup Script
+
+[Service]
+ExecStart=/bin/bash /home/admin/stacks/stalwart/backup.sh -s /opt/stalwart/ -b /home/admin/stacks/stalwart/localbuckup/ -c /home/admin/.config/rclone/rclone.conf -r "stalwart/" -e admin@cock.li -l /home/admin/stacks/stalwart/log/stalwart.log
+
+
