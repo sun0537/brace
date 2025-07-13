@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/user/watch/watcher.sh /home/user/watch/ /home/suntshd/watch/helloworld.sh
+ExecStart=/home/user/watch/watcher.sh /home/user/watch/ /home/user/watch/helloworld.sh
 Restart=always
 
 [Install]
