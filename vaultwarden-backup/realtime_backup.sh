@@ -56,7 +56,7 @@ EVENTS="close_write,create,delete,move"
 
 # 定义要排除的文件/目录的正则表达式。
 # 这会忽略所有以 -wal 或 -shm 结尾的文件，以及 icon_cache 和 tmp 目录下的所有内容。
-EXCLUDE_REGEX='(db\.sqlite3-wal|db\.sqlite3-shm|icon_cache/|tmp/)'
+EXCLUDE_REGEX='(db\.sqlite3-wal|db\.sqlite3-shm|icon_cache/|tmp/|log/)'
 
 echo "🔔 [$(date '+%Y-%m-%d %H:%M:%S')] 🚀 监控启动: 正在监视 '$VAULT_DATA_DIR' 目录及其子目录..."
 echo "   - 备份延迟设置为: ${BACKUP_DELAY} 秒"
