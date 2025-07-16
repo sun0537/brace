@@ -98,7 +98,7 @@ while true; do
         
         # 同步除数据库和临时文件外的所有内容到远程服务器
         echo " 🔔 [$(date '+%Y-%m-%d %H:%M:%S')]      - 同步附件、配置及其他文件..."
-        rsync -avz -e "$PARAM" --delete --exclude 'db.sqlite3*' --exclude 'icon_cache/' --exclude 'tmp/' "${VAULT_DATA_DIR}/" "${REMOTE_USER}:${REMOTE_PATH}"
+        rsync -avz -e "$PARAM" --delete --exclude 'db.sqlite3*' --exclude 'icon_cache/' --exclude 'tmp/' --exclude 'log/' "${VAULT_DATA_DIR}/" "${REMOTE_USER}:${REMOTE_PATH}"
         # 单独同步安全的数据库快照到远程服务器
         echo " 🔔 [$(date '+%Y-%m-%d %H:%M:%S')]     - 同步数据库快照..."
         rsync -avz -e "$PARAM" "$BACKUP_DB_FILE" "${REMOTE_USER}:${REMOTE_PATH}/db.sqlite3"
