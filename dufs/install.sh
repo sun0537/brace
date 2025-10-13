@@ -13,10 +13,13 @@ PURGE=false
 INSTALL_USER="dufs"
 
 CONFIG_DIR="/usr/local/etc/dufs"
-CONFIG_FILE="${CONFIG_DIR}/config.yml"
+CONFIG_FILE="${CONFIG_DIR}/config.yaml"
 DATA_DIR="/var/lib/dufs"
 LOG_DIR="/var/log/dufs"
 SERVICE_FILE="/etc/systemd/system/dufs.service"
+
+SERVICE_FILE_TEMPLATE="/etc/systemd/system/dufs@.service"
+CONFIG_FILE_EXAMPLE="${CONFIG_DIR}/config.yaml.example"
 
 NEED_REMOVE_TEMP="$(mktemp)"
 NEED_REMOVE=( "$NEED_REMOVE_TEMP" )
@@ -179,7 +182,7 @@ create_config_file() {
 # 准备: 请先创建 serve-path 指定的目录 (例如 mkdir -p /var/lib/dufs/shared-files)，
 #      并确保 dufs 用户有读写权限 (例如 sudo chown -R dufs:dufs /var/lib/dufs/shared-files)。
 #
-# 建议的文件服务器配置 (dufs.yml)
+# 建议的文件服务器配置 (dufs.yaml)
 
 # 1. 安全设置：将文件服务的根目录指向一个专门的文件夹，例如 'data'
 #    避免暴露配置文件等敏感信息。
@@ -216,6 +219,14 @@ EOF
     chown root:"$INSTALL_USER" "$CONFIG_FILE"
     chmod 640 "$CONFIG_FILE"
     echo -e "${INFO}已创建:${END} \"$CONFIG_FILE\""
+
+    if [ ! -f "$CONFIG_FILE_EXAMPLE" ]; then
+        echo -e "${INFO}INFO:${END} 正在创建多实例模板配置文件..."
+        cp "$CONFIG_FILE" "$CONFIG_FILE_EXAMPLE"
+        # 在模板文件顶部添加说明
+        sed -i '1s/^/# 这是一个用于多实例服务 (dufs@.service) 的模板文件。\n# 请复制此文件并以您的实例名重命名 (例如: blog.yaml)。\n/' "$CONFIG_FILE_EXAMPLE"
+        echo -e "${INFO}已创建:${END} \"$CONFIG_FILE_EXAMPLE\""
+    fi
 }
 
 setup_service() {
@@ -240,7 +251,32 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
   echo -e "${INFO}已创建:${END} \"$SERVICE_FILE\""
-  
+
+  cat <<EOF > "$SERVICE_FILE_TEMPLATE"
+[Unit]
+Description=Dufs - A file server for instance %i
+Documentation=https://github.com/sigoden/dufs
+After=network.target
+
+[Service]
+User=${INSTALL_USER}
+Group=${INSTALL_USER}
+Type=simple
+WorkingDirectory=${DATA_DIR}
+ExecStart=/usr/local/bin/dufs run -c ${CONFIG_DIR}/%i.yaml
+Restart=on-failure
+RestartSec=5
+LimitNPROC=512
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  echo -e "${INFO}已创建:${END} \"$SERVICE_FILE_TEMPLATE\""
+
+  install_directory "${SERVICE_FILE}.d" "755" "root" "root"
+  install_directory "${SERVICE_FILE_TEMPLATE}.d" "755" "root" "root"  
+
   systemctl daemon-reload
   systemctl enable dufs.service
   
@@ -255,13 +291,13 @@ EOF
 
 uninstall() {
   echo -e "${INFO}INFO:${END} 正在卸载 dufs..."
-  if systemctl list-units --type=service --all | grep -q "dufs.service"; then
-    systemctl stop dufs.service || true
-    systemctl disable dufs.service || true
+  if systemctl list-units --type=service --all | grep -q "dufs"; then
+    systemctl stop dufs.service dufs@*.service || true
+    systemctl disable dufs.service dufs@*.service || true
     echo -e "${INFO}INFO:${END} 已停止并禁用 dufs 服务。"
   fi
 
-  FILES_TO_REMOVE=( "/usr/local/bin/dufs" "$SERVICE_FILE" )
+  FILES_TO_REMOVE=( "/usr/local/bin/dufs" "$SERVICE_FILE" "$SERVICE_FILE_TEMPLATE" "${SERVICE_FILE}.d" "${SERVICE_FILE_TEMPLATE}.d" )
 
   if [[ $PURGE == true ]]; then
     echo -e "${WARN}警告: --purge 选项是毁灭性操作！${END}"
@@ -317,7 +353,7 @@ help() {
   echo "  remove                   卸载 dufs (保留配置文件和数据目录)"
   echo "  help                     显示此帮助信息"
   echo "选项:"
-  echo "  --version=<版本号>        安装指定的 dufs 版本 (例如: --version=0.35.0)"
+  echo "  --version=<版本号>       安装指定的 dufs 版本 (例如: --version=0.45.0)"
   echo "  remove --purge           彻底卸载 dufs, 包括配置、数据目录和专用用户"
   exit 0
 }
@@ -336,11 +372,13 @@ parse_args() {
 }
 
 main() {
-  trap remove_temp_files EXIT
   parse_args "$@"
-  if [[ -z $ACTION ]]; then help; fi
-  if [[ "$ACTION" == "help" ]]; then help; fi
-  
+ 
+  if [[ -z $ACTION ]] || [[ "$ACTION" == "help" ]]; then
+    help
+  fi
+
+  trap remove_temp_files EXIT
   check_root
   
   if [[ "$ACTION" == "install" ]]; then
