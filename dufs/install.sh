@@ -186,7 +186,7 @@ create_config_file() {
 
 # 1. 安全设置：将文件服务的根目录指向一个专门的文件夹，例如 'data'
 #    避免暴露配置文件等敏感信息。
-serve-path: .
+serve-path: /var/lib/dufs
 
 # 2. 网络设置：监听所有网络接口的 5000 端口
 bind: 0.0.0.0
