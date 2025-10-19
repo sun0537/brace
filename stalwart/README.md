@@ -18,7 +18,7 @@ ExecStart=/opt/stalwart/bin/stalwart --config=/opt/stalwart/etc/config.toml
 ## Usage
 
 ```
-bash -c "$(curl -L stalwart.vercel.app)" @ [ACTION] [OPTION]
+bash -c "$(curl -L stalwart-one.vercel.app)" @ [ACTION] [OPTION]
 ```
 
 脚本基于[官方脚本](https://stalw.art/docs/install/platform/linux/#:~:text=https%3A//get.stalw.art/install.sh)修改，执行脚本默认安装，增加更新删除选项
