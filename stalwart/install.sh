@@ -13,7 +13,7 @@ Stalwart 安装/卸载脚本 v${VERSION}
 用法: $0 [命令] [选项] [PREFIX]
 
 命令:
-  install         安装或更新 Stalwart
+  install         安装或更新 Stalwart (默认)
   uninstall       完全卸载 Stalwart
   help, --help    显示帮助信息
 
@@ -127,12 +127,43 @@ do_install() {
     local _bin_file="${_bin_dir}/stalwart"
     local _config_file="${_conf_dir}/config.json"
     local _env_file="${_conf_dir}/stalwart.env"
+    local _is_update=0
 
     get_architecture || return 1
     local _arch="$RETVAL"
 
     if [ -f "$_bin_file" ]; then
-        say "📦 检测到已安装，正在执行更新 (目录: ${_prefix:-FHS Standard})..."
+        _is_update=1
+        say "📦 检测到已安装的 Stalwart (目录: ${_prefix:-FHS Standard})..."
+        
+        # 获取本地版本与远程最新版本进行比对
+        local _local_version=""
+        local _remote_version=""
+
+        if [ -x "$_bin_file" ]; then
+            _local_version=$("$_bin_file" --version 2>/dev/null | awk '{print $NF}' | sed 's/^v//')
+        fi
+
+        # 利用 GitHub 的 latest 重定向抓取最新 Tag，无需下载完整文件
+        if check_cmd curl; then
+            _remote_version=$(curl -sLI -o /dev/null -w '%{url_effective}' "https://github.com/stalwartlabs/stalwart/releases/latest" | awk -F'/' '{print $NF}' | sed 's/^v//')
+        elif check_cmd wget; then
+            _remote_version=$(wget --server-response --max-redirect=0 "https://github.com/stalwartlabs/stalwart/releases/latest" 2>&1 | grep -i -m 1 "Location:" | awk -F'/' '{print $NF}' | tr -d '\r' | sed 's/^v//')
+        fi
+
+        # 如果版本一致且没有使用 --force-init，直接退出脚本
+        if [ -n "$_local_version" ] && [ -n "$_remote_version" ]; then
+            if [ "$_local_version" = "$_remote_version" ] && [ $_force_init -eq 0 ]; then
+                say "✅ 当前已是最新版本 (v${_local_version})，无需更新，结束流程！"
+                return 0
+            else
+                say "⬆️  准备更新: v${_local_version} ➔ v${_remote_version} ..."
+            fi
+        else
+            say "⚠️  无法准确获取版本信息对比，将执行覆盖更新..."
+        fi
+
+        # 执行更新前先停止服务
         if [ "${_os}" = "linux" ]; then
             check_cmd systemctl && systemctl stop stalwart.service 2>/dev/null || true
         elif [ "${_os}" = "macos" ]; then
@@ -173,7 +204,18 @@ do_install() {
     fi
 
     local _host="$(hostname -f 2>/dev/null || hostname)"
-    say "🎉 安装完成! 请在浏览器中继续设置: http://${_host}:8080/admin"
+    
+    if [ $_is_update -eq 0 ] || [ $_force_init -eq 1 ]; then
+        say "🎉 安装完成! 请在浏览器中继续设置: http://${_host}:8080/admin"
+    else
+        # 修正：将双引号和单引号过滤拆分为两步，彻底避免引号转义导致后续语法着色/解析错误
+        local _domain="$_host"
+        if [ -f "$_env_file" ] && grep -q "^STALWART_HOSTNAME=" "$_env_file"; then
+            _domain="$(grep "^STALWART_HOSTNAME=" "$_env_file" | cut -d= -f2 | tr -d '"' | tr -d "'")"
+        fi
+        say "✅ 更新完成！Stalwart 服务已使用旧配置重启。"
+        say "🌐 请访问管理后台: https://${_domain}/admin"
+    fi
 }
 
 do_uninstall() {
