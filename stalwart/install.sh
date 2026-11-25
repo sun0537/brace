@@ -11,6 +11,7 @@
 #   * --force-init 强制重写 stalwart.env
 #   * 每次安装/升级都检查并修复目录属主与权限
 #   * 提供 uninstall 子命令（交互确认，可用 --yes 跳过）
+#   * 非 root 执行时自动通过 sudo 提权重跑，无需手动加 sudo
 #
 
 set -e
@@ -19,11 +20,27 @@ set -u
 readonly BASE_URL="https://github.com/stalwartlabs/stalwart/releases/latest/download"
 readonly SCRIPT_VERSION="2.3.0"
 
+# 脚本自身的发布地址。以 bash -c "$(curl -L ...)" 或 curl | sh 方式执行时，
+# $0 不是磁盘上的文件，提权前需要按这个地址把脚本重新取回来。
+# 可用环境变量 STALWART_INSTALL_URL 覆盖（自建镜像/本地调试）。
+readonly SCRIPT_INITIATOR_URL="${STALWART_INSTALL_URL:-https://stalwart-one.vercel.app}"
+
+# 脚本自身的显示名（通过管道/命令串执行时 $0 不是文件名）
+script_name() {
+    if [ -n "$0" ] && [ -f "$0" ]; then
+        basename "$0"
+    else
+        echo "install.sh"
+    fi
+}
+
 show_help() {
+    local _me
+    _me="$(script_name)"
     cat <<EOF
 Stalwart 安装/卸载脚本（脚本版本 v${SCRIPT_VERSION}）
 
-用法: $0 [命令] [选项] [PREFIX]
+用法: ${_me} [命令] [选项] [PREFIX]
 
 命令:
   install         安装或更新 Stalwart（默认，省略命令时即执行此动作）
@@ -43,17 +60,41 @@ Stalwart 安装/卸载脚本（脚本版本 v${SCRIPT_VERSION}）
                       Linux:   /usr/local/bin, /etc/stalwart, /var/log/stalwart, /var/lib/stalwart
                       FreeBSD: /usr/local/bin, /usr/local/etc/stalwart, /var/log/stalwart, /var/db/stalwart
 
+权限:
+  脚本需要 root 权限。以普通用户直接执行时会自动调用 sudo 重新执行，
+  无需手动加 sudo；若系统没有 sudo，请先切换到 root 用户。
+  通过管道或 bash -c "\$(curl ...)" 执行时，提权前会自动重新获取脚本本体。
+
 示例:
-  $0 install /opt/stalwart
-  $0 install
-  $0 install --force-init
-  $0 uninstall
-  $0 uninstall --yes /opt/stalwart
+  ${_me} install /opt/stalwart
+  ${_me} install
+  ${_me} install --force-init
+  ${_me} uninstall
+  ${_me} uninstall --yes /opt/stalwart
 EOF
     exit 0
 }
 
 main() {
+    # 帮助信息不需要 root：先扫一遍 -h/--help/help，避免看帮助也要输密码
+    local _scan
+    for _scan in "$@"; do
+        case "$_scan" in
+            -h|--help|help) show_help ;;
+        esac
+    done
+
+    # 先做命令合法性检查，避免为一个拼错的命令就去要 sudo 密码
+    if [ $# -gt 0 ]; then
+        case "$1" in
+            install|uninstall|/*|-*) ;;
+            *) err "❌ 未知命令: $1 (可用: install / uninstall / help)" ;;
+        esac
+    fi
+
+    # 非 root 时自动用 sudo 重新执行自身（此时 "$@" 尚未被 shift，参数可原样重放）
+    ensure_root "$@"
+
     # 与官方一致：无参数时直接执行安装（帮助里 install 就是默认命令）
     local _command="install"
 
@@ -67,17 +108,11 @@ main() {
                 _command="uninstall"
                 shift
                 ;;
-            help|--help|-h)
-                show_help
-                ;;
             /*)
                 # 直接给了绝对路径，按默认命令 install 处理
                 ;;
             -*)
                 # 直接给了选项（如 --force-init），交给 do_install 解析
-                ;;
-            *)
-                err "❌ 未知命令: $1 (可用: install / uninstall / help)"
                 ;;
         esac
     fi
@@ -86,6 +121,73 @@ main() {
         install) do_install "$@" ;;
         uninstall) do_uninstall "$@" ;;
     esac
+}
+
+# 非 root 时通过 sudo 重新执行自身
+# 用 exec 替换当前进程，避免出现两层脚本输出；参数与代理变量原样传递。
+ensure_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        return 0
+    fi
+
+    if ! check_cmd sudo; then
+        say "❌ 需要 root 权限，但系统中没有 sudo。"
+        say "   请先切换到 root 用户再执行本脚本。"
+        exit 1
+    fi
+
+    local _self="" _dir=""
+
+    # 优先使用磁盘上的脚本本体（$0 是真实文件时）
+    if [ -n "$0" ] && [ -f "$0" ]; then
+        case "$0" in
+            /*)
+                _self="$0"
+                ;;
+            *)
+                _dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || _dir=""
+                if [ -n "$_dir" ]; then
+                    _self="${_dir}/$(basename "$0")"
+                fi
+                ;;
+        esac
+    fi
+
+    # 以 bash -c "$(curl ...)" 或 curl | sh 方式执行时，$0 不是文件，
+    # 把脚本按发布地址重新取回到临时文件，再交给 sudo 执行。
+    if [ -z "$_self" ]; then
+        say "📥 未找到本地脚本文件，正在重新获取: ${SCRIPT_INITIATOR_URL}"
+        _self="$(mktemp)" || err "❌ 无法创建临时文件。"
+        if check_cmd curl; then
+            curl -fsSL "$SCRIPT_INITIATOR_URL" -o "$_self" \
+                || err "❌ 重新获取脚本失败: ${SCRIPT_INITIATOR_URL}"
+        elif check_cmd wget; then
+            wget -q "$SCRIPT_INITIATOR_URL" -O "$_self" \
+                || err "❌ 重新获取脚本失败: ${SCRIPT_INITIATOR_URL}"
+        else
+            err "❌ 需要 curl 或 wget 才能重新获取脚本。"
+        fi
+        # 防止把 HTML 错误页 / 空响应当成脚本执行
+        if ! head -n 1 "$_self" 2>/dev/null | grep -q '^#!'; then
+            rm -f "$_self"
+            err "❌ 获取到的内容不是有效脚本，请检查 ${SCRIPT_INITIATOR_URL}"
+        fi
+    fi
+
+    # sudo 默认会重置环境变量，这里保留代理与 TLS 相关配置，避免提权后下载失败
+    local _name _val _preserve=""
+    for _name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY \
+                 http_proxy https_proxy all_proxy no_proxy \
+                 RUSTUP_TLS_CIPHERSUITES STALWART_INSTALL_URL; do
+        eval "_val=\${${_name}:-}"
+        if [ -n "$_val" ]; then
+            _preserve="${_preserve} ${_name}=${_val}"
+        fi
+    done
+
+    say "🔑 当前用户不是 root，正在通过 sudo 重新执行（如提示密码，请输入当前用户密码）..."
+    # shellcheck disable=SC2086
+    exec sudo env ${_preserve} sh "$_self" "$@"
 }
 
 do_install() {
@@ -110,7 +212,7 @@ do_install() {
     need_cmd hostname
 
     if [ "$(id -u)" -ne 0 ]; then
-        err "❌ 安装失败：此程序需要以 root 权限运行。"
+        err "❌ 安装失败：需要 root 权限（自动提权未生效，请手动以 root 执行）。"
     fi
 
     # 检测操作系统
@@ -366,7 +468,7 @@ do_uninstall() {
 
     # 与安装一致：卸载要删系统目录，必须 root
     if [ "$(id -u)" -ne 0 ]; then
-        err "❌ 卸载失败：此程序需要以 root 权限运行。"
+        err "❌ 卸载失败：需要 root 权限（自动提权未生效，请手动以 root 执行）。"
     fi
 
     local _os="" _uname="" _fhs=0 _account="stalwart"
