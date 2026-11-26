@@ -29,7 +29,7 @@ bash -c "$(curl -L stalwart-one.vercel.app)" @ [ACTION] [OPTION]
 
 **命令 `help` 显示**: 
 ```
-Stalwart 安装/卸载脚本（脚本版本 v2.3.0）
+Stalwart 安装/卸载脚本（脚本版本 v2.3.1）
 
 用法: install.sh [命令] [选项] [PREFIX]
 
