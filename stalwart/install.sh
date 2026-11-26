@@ -18,7 +18,7 @@ set -e
 set -u
 
 readonly BASE_URL="https://github.com/stalwartlabs/stalwart/releases/latest/download"
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.3.1"
 
 # 脚本自身的发布地址。以 bash -c "$(curl -L ...)" 或 curl | sh 方式执行时，
 # $0 不是磁盘上的文件，提权前需要按这个地址把脚本重新取回来。
@@ -394,23 +394,11 @@ do_install() {
     esac
 
     # 完成提示
-    local _host _port
-    _host="$(hostname -f 2>/dev/null || hostname)"
-    _port="$(sed -n 's/^STALWART_RECOVERY_MODE_PORT=\([0-9][0-9]*\).*/\1/p' "$_env_file" 2>/dev/null | tail -n 1)"
-
     # 已有 config.json：服务以正常模式启动，不会进入 bootstrap 模式
     # （注意：这里只看 config.json，与 --force-init 无关，否则会误报 bootstrap）
     if [ "$_has_config" -eq 1 ]; then
-        local _public_url=""
-        if [ -f "$_env_file" ]; then
-            _public_url="$(sed -n 's/^STALWART_PUBLIC_URL=//p' "$_env_file" | tail -n 1 | tr -d "\"'")"
-        fi
         say "✅ 更新完成！Stalwart 服务已使用旧配置重启。"
-        if [ -n "$_public_url" ]; then
-            say "🌐 请访问管理后台: ${_public_url}/admin"
-        else
-            say "🌐 请访问管理后台: http://${_host}:${_port:-8080}/admin"
-        fi
+        say "🌐 请访问管理后台: $(admin_url "$_env_file" https)"
         return 0
     fi
 
@@ -436,7 +424,7 @@ do_install() {
     say ""
     say "   或者在 ${_env_file} 中设置 STALWART_RECOVERY_ADMIN=admin:<password> 后重启服务。"
     say ""
-    say "   请访问以下地址继续设置: http://${_host}:${_port:-8080}/admin"
+    say "   请访问以下地址继续设置: $(admin_url "$_env_file" http)"
 }
 
 do_uninstall() {
@@ -1312,6 +1300,37 @@ ensure_service_running() {
             service stalwart status >/dev/null 2>&1 || service stalwart start >/dev/null 2>&1 || true
             ;;
     esac
+}
+
+# 解析管理后台地址。优先使用对外域名，避免把反向代理后面才可见的内部端口
+# 当成访问地址打印给用户。
+#   优先级：STALWART_PUBLIC_URL > STALWART_HOSTNAME（按 https 处理）> 主机名
+# 参数：$1 环境文件路径；$2 无域名时的回退方案
+#   https —— 默认按反代场景给 https://主机名/admin（升级已有安装时使用）
+#   http  —— bootstrap 阶段还没有反代，给 http://主机名:端口/admin
+admin_url() {
+    local _env="$1" _fallback="$2" _url _name _host _port
+
+    if [ -f "$_env" ]; then
+        _url="$(sed -n 's/^STALWART_PUBLIC_URL=//p' "$_env" | tail -n 1 | tr -d "\"'")"
+        if [ -n "$_url" ]; then
+            printf '%s/admin\n' "${_url%/}"
+            return 0
+        fi
+        _name="$(sed -n 's/^STALWART_HOSTNAME=//p' "$_env" | tail -n 1 | tr -d "\"'")"
+        if [ -n "$_name" ]; then
+            printf 'https://%s/admin\n' "$_name"
+            return 0
+        fi
+    fi
+
+    _host="$(hostname -f 2>/dev/null || hostname)"
+    if [ "$_fallback" = "http" ]; then
+        _port="$(sed -n 's/^STALWART_RECOVERY_MODE_PORT=\([0-9][0-9]*\).*/\1/p' "$_env" 2>/dev/null | tail -n 1)"
+        printf 'http://%s:%s/admin\n' "$_host" "${_port:-8080}"
+    else
+        printf 'https://%s/admin\n' "$_host"
+    fi
 }
 
 # 防止把系统目录当作 PREFIX（uninstall 会 rm -rf 整个 PREFIX）
