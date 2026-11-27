@@ -4,28 +4,26 @@
 #
 # Stalwart 安装/卸载脚本
 #
-# 以官方 install.sh 为基础对齐，同时保留本脚本的定制行为：
-#   * 中文交互提示
-#   * 未指定 PREFIX 时优先复用已有的 /opt/stalwart 安装
-#   * 升级前后比较版本，已是最新且配置完整时只做权限自检后退出
+# 功能：
+#   * install   安装或升级 Stalwart（默认命令）
+#   * uninstall 卸载 Stalwart（可用 --yes 跳过交互确认）
+#   * 未指定 PREFIX 时优先复用 /opt/stalwart 下已有的安装，否则按 FHS 布局安装
 #   * --force-init 强制重写 stalwart.env
-#   * 每次安装/升级都检查并修复目录属主与权限
-#   * 提供 uninstall 子命令（交互确认，可用 --yes 跳过）
-#   * 非 root 执行时自动通过 sudo 提权重跑，无需手动加 sudo
+#   * 安装/升级后修复目录属主与权限
+#   * 非 root 执行时自动通过 sudo 提权重跑
 #
 
 set -e
 set -u
 
 readonly BASE_URL="https://github.com/stalwartlabs/stalwart/releases/latest/download"
-readonly SCRIPT_VERSION="2.3.1"
+readonly SCRIPT_VERSION="2.4.0"
 
-# 脚本自身的发布地址。以 bash -c "$(curl -L ...)" 或 curl | sh 方式执行时，
-# $0 不是磁盘上的文件，提权前需要按这个地址把脚本重新取回来。
-# 可用环境变量 STALWART_INSTALL_URL 覆盖（自建镜像/本地调试）。
-readonly SCRIPT_INITIATOR_URL="${STALWART_INSTALL_URL:-https://stalwart-one.vercel.app}"
+# 可选的脚本来源地址，默认为空（不绑定任何域名）。
+# 仅在无法从磁盘文件或当前进程取回脚本正文时使用。
+readonly SCRIPT_INSTALL_URL="${STALWART_INSTALL_URL:-}"
 
-# 脚本自身的显示名（通过管道/命令串执行时 $0 不是文件名）
+# 脚本自身的显示名
 script_name() {
     if [ -n "$0" ] && [ -f "$0" ]; then
         basename "$0"
@@ -63,7 +61,7 @@ Stalwart 安装/卸载脚本（脚本版本 v${SCRIPT_VERSION}）
 权限:
   脚本需要 root 权限。以普通用户直接执行时会自动调用 sudo 重新执行，
   无需手动加 sudo；若系统没有 sudo，请先切换到 root 用户。
-  通过管道或 bash -c "\$(curl ...)" 执行时，提权前会自动重新获取脚本本体。
+  以 bash -c "\$(curl ...)" 方式执行时，脚本会从当前进程取回自身正文后再提权，无需联网。
 
 示例:
   ${_me} install /opt/stalwart
@@ -76,7 +74,7 @@ EOF
 }
 
 main() {
-    # 帮助信息不需要 root：先扫一遍 -h/--help/help，避免看帮助也要输密码
+    # 帮助信息无需 root，先处理 -h/--help/help
     local _scan
     for _scan in "$@"; do
         case "$_scan" in
@@ -84,7 +82,7 @@ main() {
         esac
     done
 
-    # 先做命令合法性检查，避免为一个拼错的命令就去要 sudo 密码
+    # 校验命令是否合法（在提权之前）
     if [ $# -gt 0 ]; then
         case "$1" in
             install|uninstall|/*|-*) ;;
@@ -92,10 +90,10 @@ main() {
         esac
     fi
 
-    # 非 root 时自动用 sudo 重新执行自身（此时 "$@" 尚未被 shift，参数可原样重放）
+    # 非 root 时自动通过 sudo 重新执行自身（此处 "$@" 尚未被 shift）
     ensure_root "$@"
 
-    # 与官方一致：无参数时直接执行安装（帮助里 install 就是默认命令）
+    # 无参数时执行安装（install 为默认命令）
     local _command="install"
 
     if [ $# -gt 0 ]; then
@@ -123,11 +121,17 @@ main() {
     esac
 }
 
-# 非 root 时通过 sudo 重新执行自身
-# 用 exec 替换当前进程，避免出现两层脚本输出；参数与代理变量原样传递。
+# 非 root 时通过 sudo 重新执行自身。
+# 脚本正文来源依次为：磁盘文件、BASH_EXECUTION_STRING、STALWART_INSTALL_URL。
+# 参数与代理变量原样传递。
 ensure_root() {
     if [ "$(id -u)" -eq 0 ]; then
         return 0
+    fi
+
+    # 已提权过仍非 root 时退出，避免重复执行
+    if [ "${STALWART_SUDO_REEXEC:-0}" = "1" ]; then
+        err "❌ 已尝试通过 sudo 提权，但当前仍不是 root，已停止以避免递归。"
     fi
 
     if ! check_cmd sudo; then
@@ -136,9 +140,9 @@ ensure_root() {
         exit 1
     fi
 
-    local _self="" _dir=""
+    local _self="" _dir="" _tmp=""
 
-    # 优先使用磁盘上的脚本本体（$0 是真实文件时）
+    # 1) 磁盘上的脚本文件（$0 是真实文件时）
     if [ -n "$0" ] && [ -f "$0" ]; then
         case "$0" in
             /*)
@@ -153,28 +157,57 @@ ensure_root() {
         esac
     fi
 
-    # 以 bash -c "$(curl ...)" 或 curl | sh 方式执行时，$0 不是文件，
-    # 把脚本按发布地址重新取回到临时文件，再交给 sudo 执行。
-    if [ -z "$_self" ]; then
-        say "📥 未找到本地脚本文件，正在重新获取: ${SCRIPT_INITIATOR_URL}"
-        _self="$(mktemp)" || err "❌ 无法创建临时文件。"
-        if check_cmd curl; then
-            curl -fsSL "$SCRIPT_INITIATOR_URL" -o "$_self" \
-                || err "❌ 重新获取脚本失败: ${SCRIPT_INITIATOR_URL}"
-        elif check_cmd wget; then
-            wget -q "$SCRIPT_INITIATOR_URL" -O "$_self" \
-                || err "❌ 重新获取脚本失败: ${SCRIPT_INITIATOR_URL}"
+    # 2) bash -c "$(curl ...)"：从 BASH_EXECUTION_STRING 取出脚本正文
+    if [ -z "$_self" ] && [ -n "${BASH_EXECUTION_STRING:-}" ]; then
+        _tmp="$(mktemp)" || err "❌ 无法创建临时文件。"
+        printf '%s\n' "$BASH_EXECUTION_STRING" > "$_tmp"
+        # 校验取到的内容是本脚本
+        if grep -q 'SCRIPT_VERSION=' "$_tmp" 2>/dev/null; then
+            chmod 700 "$_tmp"
+            _self="$_tmp"
+            say "📄 已从当前进程取回脚本正文，无需联网。"
         else
-            err "❌ 需要 curl 或 wget 才能重新获取脚本。"
-        fi
-        # 防止把 HTML 错误页 / 空响应当成脚本执行
-        if ! head -n 1 "$_self" 2>/dev/null | grep -q '^#!'; then
-            rm -f "$_self"
-            err "❌ 获取到的内容不是有效脚本，请检查 ${SCRIPT_INITIATOR_URL}"
+            rm -f "$_tmp"
+            _tmp=""
         fi
     fi
 
-    # sudo 默认会重置环境变量，这里保留代理与 TLS 相关配置，避免提权后下载失败
+    # 3) 从 STALWART_INSTALL_URL 下载脚本
+    if [ -z "$_self" ] && [ -n "$SCRIPT_INSTALL_URL" ]; then
+        say "📥 未找到本地脚本文件，正在从 ${SCRIPT_INSTALL_URL} 获取..."
+        _tmp="$(mktemp)" || err "❌ 无法创建临时文件。"
+        if check_cmd curl; then
+            curl -fsSL "$SCRIPT_INSTALL_URL" -o "$_tmp" \
+                || { rm -f "$_tmp"; err "❌ 获取脚本失败: ${SCRIPT_INSTALL_URL}"; }
+        elif check_cmd wget; then
+            wget -q "$SCRIPT_INSTALL_URL" -O "$_tmp" \
+                || { rm -f "$_tmp"; err "❌ 获取脚本失败: ${SCRIPT_INSTALL_URL}"; }
+        else
+            rm -f "$_tmp"
+            err "❌ 需要 curl 或 wget 才能从 ${SCRIPT_INSTALL_URL} 获取脚本。"
+        fi
+        # 校验下载内容是有效脚本
+        if head -n 1 "$_tmp" 2>/dev/null | grep -q '^#!'; then
+            chmod 700 "$_tmp"
+            _self="$_tmp"
+        else
+            rm -f "$_tmp"
+            _tmp=""
+            err "❌ 获取到的内容不是有效脚本，请检查 ${SCRIPT_INSTALL_URL}"
+        fi
+    fi
+
+    if [ -z "$_self" ]; then
+        say "❌ 无法定位脚本文件，无法自动提权。"
+        say "   请改用以下任一方式："
+        say "     bash -c \"\$(curl -L <脚本地址>)\" @ $*"
+        say "     curl -fsSL <脚本地址> | sudo sh -s -- $*"
+        say "     curl -fsSL <脚本地址> -o install.sh && sh install.sh $*"
+        say "   或指定脚本地址后重试：STALWART_INSTALL_URL=<脚本地址>"
+        exit 1
+    fi
+
+    # 保留代理与 TLS 相关环境变量（sudo 默认会重置）
     local _name _val _preserve=""
     for _name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY \
                  http_proxy https_proxy all_proxy no_proxy \
@@ -186,12 +219,22 @@ ensure_root() {
     done
 
     say "🔑 当前用户不是 root，正在通过 sudo 重新执行（如提示密码，请输入当前用户密码）..."
+
+    # 使用临时文件时需要清理，故不使用 exec
+    if [ -n "$_tmp" ]; then
+        local _rc=0
+        # shellcheck disable=SC2086
+        sudo env ${_preserve} STALWART_SUDO_REEXEC=1 sh "$_self" "$@" || _rc=$?
+        rm -f "$_tmp" 2>/dev/null || true
+        exit $_rc
+    fi
+
     # shellcheck disable=SC2086
-    exec sudo env ${_preserve} sh "$_self" "$@"
+    exec sudo env ${_preserve} STALWART_SUDO_REEXEC=1 sh "$_self" "$@"
 }
 
 do_install() {
-    # 与官方一致：任何位置出现 -h/--help 都直接显示帮助（无需 root）
+    # 任何位置出现 -h/--help 都显示帮助（无需 root）
     local _arg
     for _arg in "$@"; do
         case "$_arg" in
@@ -252,9 +295,7 @@ do_install() {
         shift
     done
 
-    # 定制行为：未显式指定路径时，优先复用已有的 /opt/stalwart 安装。
-    # 只认真实安装痕迹（bin/stalwart 或 etc/config.json），避免把空目录或
-    # 无关目录当成安装目录，导致安装布局被静默切换成 $PREFIX 布局。
+    # 未显式指定 PREFIX 时，优先复用 /opt/stalwart 下已有的安装
     if [ -z "$_prefix" ] && is_opt_install; then
         _prefix="/opt/stalwart"
     fi
@@ -288,7 +329,7 @@ do_install() {
     local _env_file="${_conf_dir}/stalwart.env"
     local _is_update=0 _has_config=0
 
-    # 官方以 config.json 判断升级；这里同时兼容只有二进制的旧安装
+    # 判断是否为升级（兼容只有二进制、没有 config.json 的旧安装）
     if [ -e "$_config_file" ]; then
         _has_config=1
         _is_update=1
@@ -308,7 +349,7 @@ do_install() {
             _local_version="$("$_bin_file" --version 2>/dev/null | head -n 1 | awk '{print $NF}' | sed 's/^v//')"
         fi
 
-        # 利用 GitHub 的 latest 重定向抓取最新 Tag，无需下载完整文件
+        # 通过 GitHub latest 重定向获取最新版本号
         if check_cmd curl; then
             _remote_version=$(curl -sLI -o /dev/null -w '%{url_effective}' "https://github.com/stalwartlabs/stalwart/releases/latest" | awk -F'/' '{print $NF}' | sed 's/^v//' | head -n 1)
         elif check_cmd wget; then
@@ -317,10 +358,7 @@ do_install() {
 
         if [ -n "$_local_version" ] && [ -n "$_remote_version" ] && [ "$_local_version" = "$_remote_version" ]; then
             say "✅ 当前已是最新版本 (v${_local_version})"
-            # 只有「配置完整 + 未指定 --force-init」才允许提前退出：
-            #   * config.json 存在 → 服务以正常模式运行，不会进入 bootstrap
-            #   * stalwart.env 存在 → 不是"只有二进制"的半装状态
-            # 否则必须继续走完整流程，避免半装状态被永久跳过。
+            # 配置完整且未指定 --force-init 时提前退出
             if [ "$_has_config" -eq 1 ] && [ -e "$_env_file" ] && [ "$_force_init" -eq 0 ] && service_installed "$_os"; then
                 say "🔐 检查并修复目录权限..."
                 fix_permissions "$_account" "$_conf_dir" "$_log_dir" "$_data_dir" "$_env_file"
@@ -336,12 +374,12 @@ do_install() {
         fi
     fi
 
-    # 先创建服务账号，再创建目录（与官方一致，保证目录可正确 chown）
+    # 先创建服务账号，再创建目录
     create_account "$_os" "$_account"
 
     ensure mkdir -p "$_bin_dir" "$_conf_dir" "$_log_dir" "$_data_dir"
 
-    # 下载并安装二进制：先写 .new，再原子替换，避免中断后留下损坏的二进制
+    # 下载并安装二进制（先写 .new 再原子替换）
     say "⏳ 正在下载 stalwart (${_arch})..."
     local _tmp _tar
     _tmp="$(mktemp -d)"
@@ -351,8 +389,7 @@ do_install() {
     ensure cp "${_tmp}/stalwart" "${_bin_file}.new"
     ensure chmod 0755 "${_bin_file}.new"
 
-    # 新二进制已就绪，此时才停止服务：
-    # 下载/解压失败会直接退出，不会把线上服务停在"已停止"状态。
+    # 二进制就绪后停止服务
     if [ "$_is_update" -eq 1 ]; then
         stop_service "$_os"
     fi
@@ -360,7 +397,7 @@ do_install() {
     ensure mv -f "${_bin_file}.new" "$_bin_file"
     ensure rm -rf "$_tmp"
 
-    # 仅在文件不存在或 --force-init 时写入环境文件，避免升级时覆盖用户配置
+    # 仅在文件不存在或指定 --force-init 时写入环境文件
     if [ ! -e "$_env_file" ] || [ "$_force_init" -eq 1 ]; then
         say "📝 正在写入环境文件 ${_env_file}..."
         write_env_file "$_env_file"
@@ -394,8 +431,7 @@ do_install() {
     esac
 
     # 完成提示
-    # 已有 config.json：服务以正常模式启动，不会进入 bootstrap 模式
-    # （注意：这里只看 config.json，与 --force-init 无关，否则会误报 bootstrap）
+    # 已有 config.json：服务以正常模式启动
     if [ "$_has_config" -eq 1 ]; then
         say "✅ 更新完成！Stalwart 服务已使用旧配置重启。"
         say "🌐 请访问管理后台: $(admin_url "$_env_file" https)"
@@ -454,7 +490,7 @@ do_uninstall() {
         shift
     done
 
-    # 与安装一致：卸载要删系统目录，必须 root
+    # 卸载需要 root 权限
     if [ "$(id -u)" -ne 0 ]; then
         err "❌ 卸载失败：需要 root 权限（自动提权未生效，请手动以 root 执行）。"
     fi
@@ -468,7 +504,7 @@ do_uninstall() {
         *)       _os="linux" ;;
     esac
 
-    # 自动识别安装布局：只认真实安装痕迹，不看目录是否存在
+    # 自动识别安装布局
     if [ -z "$_prefix" ]; then
         local _has_opt=0 _has_fhs=0
         if is_opt_install; then
@@ -1220,7 +1256,7 @@ assert_nz() {
     if [ -z "$1" ]; then err "assert_nz $2"; fi
 }
 
-# 判断 /opt/stalwart 下是否存在真实安装痕迹（只看目录存在会把空目录误判为安装）
+# 判断 /opt/stalwart 下是否存在真实的安装
 is_opt_install() {
     [ -f "/opt/stalwart/bin/stalwart" ] || [ -f "/opt/stalwart/etc/config.json" ]
 }
@@ -1230,7 +1266,7 @@ normalize_prefix() {
     printf '%s' "$1" | sed -e 's#//*#/#g' -e 's#/*$##'
 }
 
-# 统一修复目录属主与权限（安装与"已是最新"自检路径共用）
+# 修复目录属主与权限
 fix_permissions() {
     local _account="$1" _conf_dir="$2" _log_dir="$3" _data_dir="$4" _env_file="$5"
     ensure chown "${_account}:${_account}" "$_conf_dir" "$_log_dir" "$_data_dir"
@@ -1239,7 +1275,7 @@ fix_permissions() {
     ensure chmod 0640 "$_env_file"
 }
 
-# 停止已注册的服务（升级替换二进制前调用）
+# 停止服务
 stop_service() {
     local _os="$1"
     case "$_os" in
@@ -1259,7 +1295,7 @@ stop_service() {
     esac
 }
 
-# 判断服务单元是否已注册（缺失时不能提前返回，否则会留下"没有服务"的安装）
+# 判断服务单元是否已注册
 service_installed() {
     case "$1" in
         linux)
@@ -1277,7 +1313,7 @@ service_installed() {
     esac
 }
 
-# 服务未运行时拉起（"已是最新"提前返回前调用，避免脚本跑完服务却是停的）
+# 服务未运行时拉起
 ensure_service_running() {
     local _os="$1"
     case "$_os" in
@@ -1302,12 +1338,11 @@ ensure_service_running() {
     esac
 }
 
-# 解析管理后台地址。优先使用对外域名，避免把反向代理后面才可见的内部端口
-# 当成访问地址打印给用户。
-#   优先级：STALWART_PUBLIC_URL > STALWART_HOSTNAME（按 https 处理）> 主机名
-# 参数：$1 环境文件路径；$2 无域名时的回退方案
-#   https —— 默认按反代场景给 https://主机名/admin（升级已有安装时使用）
-#   http  —— bootstrap 阶段还没有反代，给 http://主机名:端口/admin
+# 输出管理后台地址。
+# 优先级：STALWART_PUBLIC_URL > STALWART_HOSTNAME（https）> 主机名
+# 参数：$1 环境文件路径；$2 回退方案
+#   https —— https://主机名/admin
+#   http  —— http://主机名:端口/admin
 admin_url() {
     local _env="$1" _fallback="$2" _url _name _host _port
 
@@ -1333,8 +1368,7 @@ admin_url() {
     fi
 }
 
-# 防止把系统目录当作 PREFIX（uninstall 会 rm -rf 整个 PREFIX）
-# 入参必须已由 normalize_prefix 规范化。
+# 校验安装路径：拒绝系统目录与非绝对路径（入参需先经 normalize_prefix 处理）
 validate_prefix() {
     local _p="$1"
     [ -n "$_p" ] || err "❌ 非法的安装路径（为空）"
@@ -1342,7 +1376,7 @@ validate_prefix() {
         /*) ;;
         *) err "❌ 安装路径必须是绝对路径: $_p" ;;
     esac
-    # 拒绝 '.' 与 '..' 路径段：/opt/.. 之类会被解析成根目录
+    # 拒绝包含 '.' 或 '..' 的路径段
     case "/${_p}/" in
         */../*|*/./*) err "❌ 安装路径不能包含 '.' 或 '..' 路径段: $_p" ;;
     esac
