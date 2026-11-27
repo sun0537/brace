@@ -24,12 +24,10 @@ bash -c "$(curl -L stalwart-one.vercel.app)" @ [ACTION] [OPTION]
 脚本基于[官方脚本](https://stalw.art/docs/install/platform/linux/#:~:text=https%3A//get.stalw.art/install.sh)修改，执行脚本默认安装，增加更新删除选项
 
 以普通用户执行即可，脚本会自动通过 `sudo` 提权重跑（会提示输入当前用户密码），不需要手动加 `sudo`。
-通过 `bash -c "$(curl ...)"` 或管道方式执行时，提权前会先从 `stalwart-one.vercel.app` 重新获取脚本本体；
-如需指向镜像，可设置环境变量 `STALWART_INSTALL_URL`。
 
 **命令 `help` 显示**: 
 ```
-Stalwart 安装/卸载脚本（脚本版本 v2.3.1）
+Stalwart 安装/卸载脚本（脚本版本 v2.4.0）
 
 用法: install.sh [命令] [选项] [PREFIX]
 
@@ -54,7 +52,7 @@ Stalwart 安装/卸载脚本（脚本版本 v2.3.1）
 权限:
   脚本需要 root 权限。以普通用户直接执行时会自动调用 sudo 重新执行，
   无需手动加 sudo；若系统没有 sudo，请先切换到 root 用户。
-  通过管道或 bash -c "$(curl ...)" 执行时，提权前会自动重新获取脚本本体。
+  以 bash -c "$(curl ...)" 方式执行时，脚本会从当前进程取回自身正文后再提权，无需联网。
 
 示例:
   install.sh install /opt/stalwart
